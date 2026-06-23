@@ -1,17 +1,20 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
   Rect,
   BlurMask,
   Atlas,
   rect,
   Skia,
+  useImage,
+  useClock,
   type SkImage,
 } from "@shopify/react-native-skia";
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
+import type { SpriteSheetConfig } from "../../data/idlemonsData";
 
 /**
  * Recorte (frame) de um Sprite Sheet 2D em pixels de origem.
- * É a unidade que o `<Atlas>` fatia da textura para desenhar um quadro.
+ * Unidade que o `<Atlas>` fatia da textura para desenhar um quadro.
  */
 export interface SpriteFrame {
   x: number;
@@ -27,28 +30,32 @@ interface SpriteProps {
   y: SharedValue<number>;
   /** Lado do sprite em pixels de destino na arena. */
   size: number;
-  /** Cor neon do placeholder atual (glow + preenchimento). */
+  /** Cor neon do fallback (glow + preenchimento) enquanto a textura carrega. */
   color: string;
-  /** Raio do blur do glow externo. */
+  /** Raio do blur do glow externo (mantém a estética neon nos sprites). */
   glowBlur: number;
   /**
-   * Textura do Sprite Sheet. ENQUANTO `null/undefined`, renderiza o quadrado
-   * neon (MVP). Quando injetado, ativa o caminho de pixel art fatiado.
+   * Sprite Sheet local (module id do Metro via `require`). Enquanto a imagem
+   * está carregando (`null`) — ou ausente — renderiza o quadrado neon (MVP).
    */
-  image?: SkImage | null;
-  /** Quadro atual dentro do sheet (origem do recorte). */
-  frame?: SpriteFrame;
+  source?: number;
+  /**
+   * Config de fatiamento/animação do sheet. `undefined` => a imagem inteira é
+   * tratada como um único quadro estático (caso do placeholder de uma frame).
+   */
+  sheet?: SpriteSheetConfig;
 }
 
 /**
- * Renderizador abstrato de entidade (`renderSprite`).
+ * SpriteAnimator: renderizador de entidade orientado a pixel art.
  *
- * Hoje devolve o quadrado neon com glow (placeholder do MVP). A assinatura já
- * está preparada para receber um `SkImage` (Sprite Sheet) e fatiá-lo via
- * `<Atlas>` do Skia — bastará passar `image` + `frame` para trocar o
- * placeholder pela animação 2D sem tocar no motor de combate.
+ * Consome a textura local com `useImage(source)`. ENQUANTO ela carrega (`null`),
+ * desenha o quadrado neon com glow (fallback do MVP) — sem tela preta e sem
+ * custo de bridge. Quando a imagem chega, delega para o caminho de Sprite Sheet
+ * fatiado via `<Atlas>` (animação 100% na UI thread).
  *
- * Não introduz re-render: posição/quadro fluem por SharedValues (UI thread).
+ * `useImage` é chamado incondicionalmente (Rules of Hooks). A troca
+ * imagem ⇄ fallback é só renderização condicional.
  */
 export function Sprite({
   x,
@@ -56,15 +63,25 @@ export function Sprite({
   size,
   color,
   glowBlur,
-  image,
-  frame,
+  source,
+  sheet,
 }: SpriteProps) {
-  // Caminho futuro: pixel art fatiada do Sprite Sheet.
-  if (image && frame) {
-    return <SpriteSheet image={image} frame={frame} x={x} y={y} size={size} />;
+  const image = useImage(source ?? null);
+
+  if (image) {
+    return (
+      <SpriteSheetAnimator
+        image={image}
+        sheet={sheet}
+        x={x}
+        y={y}
+        size={size}
+        glowBlur={glowBlur}
+      />
+    );
   }
 
-  // Caminho atual (MVP): quadrado neon com glow externo.
+  // Fallback (imagem carregando/ausente): quadrado neon com glow externo.
   return (
     <>
       <Rect x={x} y={y} width={size} height={size} color={color}>
@@ -75,31 +92,64 @@ export function Sprite({
   );
 }
 
-interface SpriteSheetProps {
+interface SpriteSheetAnimatorProps {
   image: SkImage;
-  frame: SpriteFrame;
+  sheet?: SpriteSheetConfig;
   x: SharedValue<number>;
   y: SharedValue<number>;
   size: number;
+  glowBlur: number;
 }
 
 /**
- * Caminho de Sprite Sheet via `<Atlas>`: desenha um único recorte da textura
- * escalado para `size`, posicionado pelos SharedValues. Mantido isolado para
- * respeitar as Rules of Hooks (hooks só rodam quando há `image`).
+ * Caminho de Sprite Sheet via `<Atlas>`. Isolado para que os hooks de animação
+ * só montem quando há `image` (respeitando as Rules of Hooks).
+ *
+ * - Sem `sheet`: a textura inteira é o único quadro (placeholder de 1 frame).
+ * - Com `sheet`: percorre os quadros horizontalmente pela `useClock` do Skia,
+ *   na cadência de `fps`, tudo na UI thread (sem re-render do React).
+ *
+ * O glow é preservado desenhando o Atlas duas vezes: uma borrada (BlurMask
+ * "outer" = halo neon) e uma nítida por cima.
  */
-function SpriteSheet({ image, frame, x, y, size }: SpriteSheetProps) {
-  // Sprite = recorte de origem (estável enquanto o quadro não muda).
-  const sprites = useMemo(
-    () => [rect(frame.x, frame.y, frame.width, frame.height)],
-    [frame.x, frame.y, frame.width, frame.height],
-  );
+function SpriteSheetAnimator({
+  image,
+  sheet,
+  x,
+  y,
+  size,
+  glowBlur,
+}: SpriteSheetAnimatorProps) {
+  const clock = useClock();
 
-  // RSXform = escala + translação. Anima na UI thread (sem bridge).
+  // Geometria do quadro resolvida no JS (numérica) e capturada nos worklets.
+  const frameWidth = sheet?.frameWidth ?? image.width();
+  const frameHeight = sheet?.frameHeight ?? image.height();
+  const frameCount = sheet?.frameCount ?? 1;
+  const fps = sheet?.fps ?? 1;
+
+  // Recorte de origem animado. Só lê o clock quando há mais de um quadro,
+  // mantendo o caso estático (placeholder) sem recomputo por frame.
+  const sprites = useDerivedValue(() => {
+    if (frameCount <= 1) {
+      return [rect(0, 0, frameWidth, frameHeight)];
+    }
+    const index = Math.floor(clock.value / (1000 / fps)) % frameCount;
+    return [rect(index * frameWidth, 0, frameWidth, frameHeight)];
+  });
+
+  // RSXform = escala (destino/origem) + translação pela posição compartilhada.
   const transforms = useDerivedValue(() => {
-    const scale = size / frame.width;
+    const scale = size / frameWidth;
     return [Skia.RSXform(scale, 0, x.value, y.value)];
   });
 
-  return <Atlas image={image} sprites={sprites} transforms={transforms} />;
+  return (
+    <>
+      <Atlas image={image} sprites={sprites} transforms={transforms}>
+        <BlurMask blur={glowBlur} style="outer" />
+      </Atlas>
+      <Atlas image={image} sprites={sprites} transforms={transforms} />
+    </>
+  );
 }

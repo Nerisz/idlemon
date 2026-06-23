@@ -21,6 +21,7 @@ import {
 
 import { palette } from "../../theme/colors";
 import type { CombatStats, PartyMember } from "../../store/useGameStore";
+import type { SpriteSheetConfig } from "../../data/idlemonsData";
 import { HealthBar } from "./HealthBar";
 import { FloatingDamage } from "./FloatingDamage";
 import { ParallaxBackground } from "./ParallaxBackground";
@@ -399,6 +400,8 @@ export default function SkiaCombatEngine({
             partyX={partyX}
             baseY={centerY - HERO_SIZE / 2}
             color={member.color}
+            spritePath={member.spritePath}
+            sheet={member.sheet}
             bobPhase={bobPhase}
             combatState={combatState}
           />
@@ -459,8 +462,12 @@ interface PartyMemberSpriteProps {
   partyX: SharedValue<number[]>;
   /** Topo da entidade em repouso (linha do chão, constante por frame). */
   baseY: number;
-  /** Cor neon do Idlemon (glow + preenchimento). */
+  /** Cor neon do Idlemon (fallback + glow). */
   color: string;
+  /** Sprite Sheet local (module id do Metro). `undefined` => só placeholder. */
+  spritePath?: number;
+  /** Config de fatiamento/animação do sheet. `undefined` => quadro único. */
+  sheet?: SpriteSheetConfig;
   /** Fase do bobbing de caminhada (aplicado apenas ao Líder). */
   bobPhase: SharedValue<number>;
   /** Estado do combate — o bob só age durante a caminhada (APPROACHING). */
@@ -480,6 +487,8 @@ function PartyMemberSprite({
   partyX,
   baseY,
   color,
+  spritePath,
+  sheet,
   bobPhase,
   combatState,
 }: PartyMemberSpriteProps) {
@@ -502,6 +511,8 @@ function PartyMemberSprite({
       size={HERO_SIZE}
       color={color}
       glowBlur={HERO_GLOW_BLUR}
+      source={spritePath}
+      sheet={sheet}
     />
   );
 }

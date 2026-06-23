@@ -1,14 +1,16 @@
 import { useMemo } from "react";
 import { create } from "zustand";
-import { palette } from "../theme/colors";
 import {
-  HERO_DAMAGE,
-  HERO_MAX_HEALTH,
   DAMAGE_UPGRADE_BASE_COST,
   DAMAGE_UPGRADE_AMOUNT,
   DAMAGE_UPGRADE_COST_GROWTH,
 } from "../components/combat/constants";
 import { MAX_RUNE_SLOTS, getRuneById, type Rune } from "../data/runesData";
+import {
+  IDLEMONS,
+  createPartyMember,
+  type SpriteSheetConfig,
+} from "../data/idlemonsData";
 import { rollRune } from "../utils/gachaSystem";
 
 /**
@@ -26,6 +28,14 @@ export interface PartyMember {
   maxHealth: number;
   /** Cor neon do placeholder (glow + preenchimento) no motor Skia. */
   color: string;
+  /**
+   * Sprite Sheet local (module id do Metro via `require`). Quando presente, o
+   * motor consome com `useImage`; enquanto carrega (`null`), cai no quadrado
+   * neon (`color`) como fallback. `undefined` => entidade puramente placeholder.
+   */
+  spritePath?: number;
+  /** Config de fatiamento/animação do sheet. `undefined` => quadro único. */
+  sheet?: SpriteSheetConfig;
 }
 
 /**
@@ -83,15 +93,7 @@ interface GameState {
 export const useGameStore = create<GameState>((set, get) => ({
   gold: 0,
   stage: 1,
-  party: [
-    {
-      id: "idlemon_1",
-      baseDamage: HERO_DAMAGE,
-      currentHealth: HERO_MAX_HEALTH,
-      maxHealth: HERO_MAX_HEALTH,
-      color: palette.neonCyan,
-    },
-  ],
+  party: [createPartyMember(IDLEMONS.volt_slime, "idlemon_1")],
   damageUpgradeCost: DAMAGE_UPGRADE_BASE_COST,
   inventoryRunes: ["rune_fang", "rune_midas"],
   equippedRunes: Array.from({ length: MAX_RUNE_SLOTS }, () => null),
