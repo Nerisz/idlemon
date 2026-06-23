@@ -21,7 +21,7 @@ import {
 } from "react-native-reanimated";
 
 import { palette } from "../../theme/colors";
-import type { PartyMember } from "../../store/useGameStore";
+import type { CombatStats, PartyMember } from "../../store/useGameStore";
 import { HealthBar } from "./HealthBar";
 import { FloatingDamage } from "./FloatingDamage";
 import {
@@ -54,9 +54,20 @@ import {
 /** Fases do encontro. Pronto para expansão (status, fuga, recompensa). */
 export type CombatState = "APPROACHING" | "BATTLING" | "VICTORY" | "DEFEAT";
 
+/** Subconjunto dos modificadores de runas que o motor aplica em tempo real. */
+export type CombatModifiers = Pick<
+  CombatStats,
+  "damageMultiplier" | "goldMultiplier" | "attackSpeedMultiplier"
+>;
+
 interface SkiaCombatEngineProps {
   /** Party do jogador (fonte de verdade no `useGameStore`). Índice 0 = Líder. */
   party: PartyMember[];
+  /**
+   * Modificadores agregados das runas equipadas (vindos de `useCombatStats`).
+   * Espelhados em SharedValues e lidos no loop para buffar o combate ao vivo.
+   */
+  modifiers: CombatModifiers;
   /**
    * Disparado na UI thread (via `runOnJS`) quando o inimigo é derrotado.
    * Recebe a recompensa de ouro já calculada com o multiplicador de estágio.
@@ -79,6 +90,7 @@ interface SkiaCombatEngineProps {
  */
 export default function SkiaCombatEngine({
   party,
+  modifiers,
   onEnemyDefeated,
 }: SkiaCombatEngineProps) {
   const { width: screenWidth } = useWindowDimensions();
@@ -133,6 +145,11 @@ export default function SkiaCombatEngine({
   // Acumulador de tempo para o dano periódico.
   const damageTimer = useSharedValue(0);
 
+  // Modificadores das runas espelhados na UI thread (lidos ao vivo no loop).
+  const damageMultiplier = useSharedValue(modifiers.damageMultiplier);
+  const goldMultiplier = useSharedValue(modifiers.goldMultiplier);
+  const attackSpeedMultiplier = useSharedValue(modifiers.attackSpeedMultiplier);
+
   // Disparadores de Floating Combat Text (contador + último valor por entidade).
   const heroHitId = useSharedValue(0);
   const enemyHitId = useSharedValue(0);
@@ -149,6 +166,19 @@ export default function SkiaCombatEngine({
   useEffect(() => {
     partyDamage.value = party.map((m) => m.baseDamage);
   }, [party, partyDamage]);
+
+  // Espelha os modificadores das runas (store → UI thread). Como o loop lê
+  // `.value` ao vivo, equipar/desequipar buffa o combate sem reiniciar o frame.
+  useEffect(() => {
+    damageMultiplier.value = modifiers.damageMultiplier;
+    goldMultiplier.value = modifiers.goldMultiplier;
+    attackSpeedMultiplier.value = modifiers.attackSpeedMultiplier;
+  }, [
+    modifiers,
+    damageMultiplier,
+    goldMultiplier,
+    attackSpeedMultiplier,
+  ]);
 
   // Reposiciona a fila quando a quantidade de membros muda (ex.: recrutamento).
   useEffect(() => {
@@ -203,20 +233,25 @@ export default function SkiaCombatEngine({
       partyX.value = marchFollowers(positions[0]);
 
       damageTimer.value += dt;
-      if (damageTimer.value < DAMAGE_INTERVAL_MS) return;
+      // A runa de velocidade encurta o intervalo entre ataques (ataca mais rápido).
+      const attackInterval = DAMAGE_INTERVAL_MS / attackSpeedMultiplier.value;
+      if (damageTimer.value < attackInterval) return;
       damageTimer.value = 0;
 
       // Dano ao inimigo = soma dos membros EM POSIÇÃO DE ATAQUE (parados no slot).
       // O Líder ataca sempre enquanto batalha; seguidores só ao alcançar o slot.
       const dmgs = partyDamage.value;
       const pos = partyX.value;
-      let totalDamage = dmgs[0] ?? 0;
+      let baseTotal = dmgs[0] ?? 0;
       for (let i = 1; i < count; i++) {
         const target = pos[0] - i * PARTY_SPACING;
         if (pos[i] >= target - PARTY_IN_POSITION_EPSILON) {
-          totalDamage += dmgs[i] ?? 0;
+          baseTotal += dmgs[i] ?? 0;
         }
       }
+
+      // Buff de dano das runas aplicado ao total da Party.
+      const totalDamage = Math.round(baseTotal * damageMultiplier.value);
 
       leaderHealth.value = Math.max(0, leaderHealth.value - ENEMY_DAMAGE);
       enemyHealth.value = Math.max(0, enemyHealth.value - totalDamage);
@@ -229,7 +264,9 @@ export default function SkiaCombatEngine({
 
       // ---- Morte do inimigo: recompensa + respawn escalado --------------
       if (enemyHealth.value <= 0) {
-        const reward = BASE_GOLD_REWARD * stage.value;
+        const reward = Math.round(
+          BASE_GOLD_REWARD * stage.value * goldMultiplier.value,
+        );
         if (onEnemyDefeated) runOnJS(onEnemyDefeated)(reward);
 
         stage.value += 1;

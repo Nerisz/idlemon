@@ -2,11 +2,12 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { palette, spacing } from "../../theme/colors";
 
-export type DashboardTab = "ATRIBUTOS" | "PARTY" | "LOJA";
+export type DashboardTab = "ATRIBUTOS" | "PARTY" | "RUNAS" | "LOJA";
 
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
   { id: "ATRIBUTOS", label: "Atributos" },
   { id: "PARTY", label: "Party" },
+  { id: "RUNAS", label: "Runas" },
   { id: "LOJA", label: "Loja" },
 ];
 

@@ -5,6 +5,7 @@ import { useGameStore, type PartyMember } from "../../store/useGameStore";
 import { DAMAGE_UPGRADE_AMOUNT } from "../combat/constants";
 import { WalletHeader } from "./WalletHeader";
 import { NeonButton } from "./NeonButton";
+import { RunesView } from "./RunesView";
 import {
   DashboardTabs,
   type DashboardTab,
@@ -42,6 +43,10 @@ function TabContent({ tab }: { tab: DashboardTab }) {
 
   if (tab === "PARTY") {
     return <PartyTab />;
+  }
+
+  if (tab === "RUNAS") {
+    return <RunesView />;
   }
 
   return (

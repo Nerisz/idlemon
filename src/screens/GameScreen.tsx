@@ -1,8 +1,8 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import { StyleSheet, View } from "react-native";
 import { SkiaCombatEngine } from "../components/combat";
 import { ManagementDashboardView } from "../components/dashboard";
-import { useGameStore } from "../store/useGameStore";
+import { useGameStore, useCombatStats } from "../store/useGameStore";
 import { palette } from "../theme/colors";
 
 /**
@@ -20,6 +20,17 @@ export function GameScreen() {
   const addGold = useGameStore((state) => state.addGold);
   const nextStage = useGameStore((state) => state.nextStage);
 
+  // Modificadores das runas equipadas; referência estável p/ o motor Skia.
+  const stats = useCombatStats();
+  const modifiers = useMemo(
+    () => ({
+      damageMultiplier: stats.damageMultiplier,
+      goldMultiplier: stats.goldMultiplier,
+      attackSpeedMultiplier: stats.attackSpeedMultiplier,
+    }),
+    [stats.damageMultiplier, stats.goldMultiplier, stats.attackSpeedMultiplier],
+  );
+
   // Recompensa a vitória: credita ouro e avança o estágio na store.
   const handleEnemyDefeated = useCallback(
     (goldReward: number) => {
@@ -31,7 +42,11 @@ export function GameScreen() {
 
   return (
     <View style={styles.container}>
-      <SkiaCombatEngine party={party} onEnemyDefeated={handleEnemyDefeated} />
+      <SkiaCombatEngine
+        party={party}
+        modifiers={modifiers}
+        onEnemyDefeated={handleEnemyDefeated}
+      />
       <ManagementDashboardView />
     </View>
   );

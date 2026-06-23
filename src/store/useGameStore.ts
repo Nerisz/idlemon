@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { palette } from "../theme/colors";
 import {
@@ -7,6 +8,7 @@ import {
   DAMAGE_UPGRADE_AMOUNT,
   DAMAGE_UPGRADE_COST_GROWTH,
 } from "../components/combat/constants";
+import { MAX_RUNE_SLOTS, getRuneById } from "../data/runesData";
 
 /**
  * Um membro da Party (Idlemon). É a unidade de combate da fila indiana:
@@ -42,6 +44,13 @@ interface GameState {
   party: PartyMember[];
   /** Custo atual do próximo upgrade de dano (aplicado ao Líder). */
   damageUpgradeCost: number;
+  /** IDs das runas que o jogador possui (mochila). */
+  inventoryRunes: string[];
+  /**
+   * Slots equipados (tamanho fixo `MAX_RUNE_SLOTS`). Cada posição guarda o ID
+   * da runa ou `null` quando o slot está vazio.
+   */
+  equippedRunes: (string | null)[];
 
   addGold: (amount: number) => void;
   /** Debita ouro apenas se houver saldo. Retorna `true` em caso de sucesso. */
@@ -55,6 +64,13 @@ interface GameState {
   upgradeDamage: () => boolean;
   /** Recruta um novo membro para a Party (uso futuro: Loja). */
   addPartyMember: (member: PartyMember) => void;
+  /**
+   * Equipa uma runa do inventário em um slot. Remove a runa de qualquer outro
+   * slot antes (evita duplicar o mesmo ID em dois slots).
+   */
+  equipRune: (runeId: string, slotIndex: number) => void;
+  /** Esvazia o slot informado. */
+  unequipRune: (slotIndex: number) => void;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -70,6 +86,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     },
   ],
   damageUpgradeCost: DAMAGE_UPGRADE_BASE_COST,
+  inventoryRunes: ["rune_fang", "rune_midas"],
+  equippedRunes: Array.from({ length: MAX_RUNE_SLOTS }, () => null),
 
   addGold: (amount) =>
     set((state) => ({ gold: state.gold + Math.max(0, Math.round(amount)) })),
@@ -102,4 +120,73 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   addPartyMember: (member) =>
     set((state) => ({ party: [...state.party, member] })),
+
+  equipRune: (runeId, slotIndex) => {
+    if (slotIndex < 0 || slotIndex >= MAX_RUNE_SLOTS) return;
+    if (!get().inventoryRunes.includes(runeId)) return;
+    set((state) => {
+      const next = state.equippedRunes.map((id) => (id === runeId ? null : id));
+      next[slotIndex] = runeId;
+      return { equippedRunes: next };
+    });
+  },
+
+  unequipRune: (slotIndex) => {
+    if (slotIndex < 0 || slotIndex >= MAX_RUNE_SLOTS) return;
+    set((state) => {
+      const next = state.equippedRunes.slice();
+      next[slotIndex] = null;
+      return { equippedRunes: next };
+    });
+  },
 }));
+
+/** Modificadores de combate agregados a partir das runas equipadas. */
+export interface CombatStats {
+  /** Soma do `baseDamage` de toda a Party (sem runas). */
+  baseDamage: number;
+  /** Dano final do time já com o multiplicador de runas aplicado. */
+  finalDamage: number;
+  /** Multiplicador de dano (1 = sem bônus). */
+  damageMultiplier: number;
+  /** Multiplicador de ouro por vitória (1 = sem bônus). */
+  goldMultiplier: number;
+  /** Multiplicador de velocidade de ataque (1 = sem bônus). */
+  attackSpeedMultiplier: number;
+}
+
+/**
+ * Hook derivado: combina o `baseDamage` da Party com as porcentagens das runas
+ * equipadas. Memoizado por `party` + `equippedRunes` para evitar recomputar a
+ * cada render e estabilizar a referência consumida pelo motor Skia.
+ */
+export function useCombatStats(): CombatStats {
+  const party = useGameStore((state) => state.party);
+  const equippedRunes = useGameStore((state) => state.equippedRunes);
+
+  return useMemo(() => {
+    const baseDamage = party.reduce((sum, member) => sum + member.baseDamage, 0);
+
+    let damageMultiplier = 1;
+    let goldMultiplier = 1;
+    let attackSpeedMultiplier = 1;
+
+    for (const runeId of equippedRunes) {
+      if (!runeId) continue;
+      const rune = getRuneById(runeId);
+      if (!rune) continue;
+
+      if (rune.type === "damage_mult") damageMultiplier += rune.value;
+      else if (rune.type === "gold_bonus") goldMultiplier += rune.value;
+      else if (rune.type === "attack_speed") attackSpeedMultiplier += rune.value;
+    }
+
+    return {
+      baseDamage,
+      finalDamage: Math.round(baseDamage * damageMultiplier),
+      damageMultiplier,
+      goldMultiplier,
+      attackSpeedMultiplier,
+    };
+  }, [party, equippedRunes]);
+}
