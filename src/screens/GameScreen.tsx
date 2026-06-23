@@ -16,7 +16,7 @@ import { palette } from "../theme/colors";
  * vitórias para alimentar a economia do `useGameStore`.
  */
 export function GameScreen() {
-  const heroDamage = useGameStore((state) => state.heroDamage);
+  const party = useGameStore((state) => state.party);
   const addGold = useGameStore((state) => state.addGold);
   const nextStage = useGameStore((state) => state.nextStage);
 
@@ -31,10 +31,7 @@ export function GameScreen() {
 
   return (
     <View style={styles.container}>
-      <SkiaCombatEngine
-        heroDamage={heroDamage}
-        onEnemyDefeated={handleEnemyDefeated}
-      />
+      <SkiaCombatEngine party={party} onEnemyDefeated={handleEnemyDefeated} />
       <ManagementDashboardView />
     </View>
   );

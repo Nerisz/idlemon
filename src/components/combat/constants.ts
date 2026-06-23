@@ -35,6 +35,14 @@ export const COLLISION_THRESHOLD = HERO_SIZE / 2 + ENEMY_RADIUS;
 /** Intervalo (ms) entre cada aplicação de dano enquanto colididos. */
 export const DAMAGE_INTERVAL_MS = 1000;
 
+// ---- Party (Fila Indiana) --------------------------------------------------
+/** Espaço (px) entre as bordas de dois Idlemons na fila. */
+export const PARTY_GAP = 10;
+/** Distância centro-a-centro entre membros consecutivos da fila. */
+export const PARTY_SPACING = HERO_SIZE + PARTY_GAP;
+/** Folga (px) para considerar um membro "em posição de ataque" no slot. */
+export const PARTY_IN_POSITION_EPSILON = 0.5;
+
 // ---- Economia & Progressão (Core Loop infinito) ---------------------------
 /** Ouro base por inimigo derrotado; multiplicado pelo estágio atual. */
 export const BASE_GOLD_REWARD = 10;

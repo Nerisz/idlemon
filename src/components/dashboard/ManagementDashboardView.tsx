@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
-import { palette, spacing } from "../../theme/colors";
-import { useGameStore } from "../../store/useGameStore";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { palette, radius, spacing } from "../../theme/colors";
+import { useGameStore, type PartyMember } from "../../store/useGameStore";
 import { DAMAGE_UPGRADE_AMOUNT } from "../combat/constants";
 import { WalletHeader } from "./WalletHeader";
 import { NeonButton } from "./NeonButton";
@@ -41,14 +41,7 @@ function TabContent({ tab }: { tab: DashboardTab }) {
   }
 
   if (tab === "PARTY") {
-    return (
-      <View style={styles.tabContent}>
-        <Text style={styles.sectionTitle}>Sua Party</Text>
-        <Text style={styles.sectionHint}>
-          Recrute aliados Idlemon para lutar ao seu lado. (Em breve)
-        </Text>
-      </View>
-    );
+    return <PartyTab />;
   }
 
   return (
@@ -61,10 +54,10 @@ function TabContent({ tab }: { tab: DashboardTab }) {
   );
 }
 
-/** Aba de atributos: evolui o dano do Hero consumindo ouro da store. */
+/** Aba de atributos: evolui o dano do Líder consumindo ouro da store. */
 function AtributosTab() {
   const gold = useGameStore((state) => state.gold);
-  const heroDamage = useGameStore((state) => state.heroDamage);
+  const leaderDamage = useGameStore((state) => state.party[0]?.baseDamage ?? 0);
   const damageUpgradeCost = useGameStore((state) => state.damageUpgradeCost);
   const upgradeDamage = useGameStore((state) => state.upgradeDamage);
 
@@ -72,14 +65,14 @@ function AtributosTab() {
 
   return (
     <View style={styles.tabContent}>
-      <Text style={styles.sectionTitle}>Atributos do Herói</Text>
+      <Text style={styles.sectionTitle}>Atributos do Líder</Text>
       <Text style={styles.sectionHint}>
         Evolua o Idlemon para vencer encontros mais difíceis.
       </Text>
 
       <View style={styles.statRow}>
         <Text style={styles.statLabel}>Dano de Ataque</Text>
-        <Text style={styles.statValue}>{heroDamage}</Text>
+        <Text style={styles.statValue}>{leaderDamage}</Text>
       </View>
 
       <NeonButton
@@ -90,6 +83,62 @@ function AtributosTab() {
         onPress={upgradeDamage}
         style={styles.levelUpButton}
       />
+    </View>
+  );
+}
+
+/** Aba da Party: lista os Idlemons recrutados em cards reativos à store. */
+function PartyTab() {
+  const party = useGameStore((state) => state.party);
+  const totalDamage = party.reduce((sum, member) => sum + member.baseDamage, 0);
+
+  return (
+    <View style={styles.partyContainer}>
+      <Text style={styles.sectionTitle}>Sua Party</Text>
+      <Text style={styles.partyHint}>
+        {party.length} {party.length === 1 ? "Idlemon" : "Idlemons"} · Dano total{" "}
+        <Text style={styles.partyHintAccent}>{totalDamage}</Text>
+      </Text>
+
+      <ScrollView
+        style={styles.partyList}
+        contentContainerStyle={styles.partyListContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {party.map((member, index) => (
+          <PartyMemberCard
+            key={member.id}
+            member={member}
+            isLeader={index === 0}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** Card individual de um membro da Party. */
+function PartyMemberCard({
+  member,
+  isLeader,
+}: {
+  member: PartyMember;
+  isLeader: boolean;
+}) {
+  return (
+    <View style={[styles.card, { borderColor: member.color }]}>
+      <View style={styles.cardLeft}>
+        <View style={[styles.colorDot, { backgroundColor: member.color }]} />
+        <View>
+          <Text style={styles.cardId}>{member.id}</Text>
+          {isLeader && <Text style={styles.cardBadge}>Líder</Text>}
+        </View>
+      </View>
+
+      <View style={styles.cardRight}>
+        <Text style={styles.cardDamageValue}>{member.baseDamage}</Text>
+        <Text style={styles.cardDamageLabel}>DANO</Text>
+      </View>
     </View>
   );
 }
@@ -148,5 +197,72 @@ const styles = StyleSheet.create({
   levelUpButton: {
     marginTop: spacing.md,
     minWidth: 240,
+  },
+  partyContainer: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  partyHint: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  partyHintAccent: {
+    color: palette.neonGold,
+    fontWeight: "800",
+  },
+  partyList: {
+    flex: 1,
+    marginTop: spacing.sm,
+  },
+  partyListContent: {
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    backgroundColor: palette.surface,
+  },
+  cardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  colorDot: {
+    width: 14,
+    height: 14,
+    borderRadius: radius.pill,
+  },
+  cardId: {
+    color: palette.textPrimary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  cardBadge: {
+    color: palette.neonPurple,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    marginTop: 2,
+  },
+  cardRight: {
+    alignItems: "flex-end",
+  },
+  cardDamageValue: {
+    color: palette.neonCyan,
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  cardDamageLabel: {
+    color: palette.textMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1,
   },
 });

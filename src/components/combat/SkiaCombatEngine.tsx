@@ -16,20 +16,20 @@ import {
   withTiming,
   withSequence,
   runOnJS,
+  type SharedValue,
   type FrameInfo,
 } from "react-native-reanimated";
 
 import { palette } from "../../theme/colors";
+import type { PartyMember } from "../../store/useGameStore";
 import { HealthBar } from "./HealthBar";
 import { FloatingDamage } from "./FloatingDamage";
 import {
   ARENA_HEIGHT_RATIO,
   HERO_SIZE,
   HERO_SPEED,
-  HERO_GLOW_COLOR,
   HERO_GLOW_BLUR,
   HERO_MAX_HEALTH,
-  HERO_DAMAGE,
   ENEMY_RADIUS,
   ENEMY_SPEED,
   ENEMY_GLOW_COLOR,
@@ -39,6 +39,8 @@ import {
   ENTITY_COLOR,
   COLLISION_THRESHOLD,
   DAMAGE_INTERVAL_MS,
+  PARTY_SPACING,
+  PARTY_IN_POSITION_EPSILON,
   BASE_GOLD_REWARD,
   ENEMY_HEALTH_GROWTH,
   HEALTH_BAR_WIDTH,
@@ -53,8 +55,8 @@ import {
 export type CombatState = "APPROACHING" | "BATTLING" | "VICTORY" | "DEFEAT";
 
 interface SkiaCombatEngineProps {
-  /** Dano base do Hero por tick (fonte de verdade no `useGameStore`). */
-  heroDamage?: number;
+  /** Party do jogador (fonte de verdade no `useGameStore`). Índice 0 = Líder. */
+  party: PartyMember[];
   /**
    * Disparado na UI thread (via `runOnJS`) quando o inimigo é derrotado.
    * Recebe a recompensa de ouro já calculada com o multiplicador de estágio.
@@ -66,21 +68,39 @@ interface SkiaCombatEngineProps {
  * Motor de combate Skia.
  *
  * Responsabilidade ÚNICA: simular e renderizar o encontro na UI thread via
- * Reanimated worklets. A economia vive no `useGameStore` (JS thread): o dano do
- * Hero entra via prop espelhada em SharedValue, e as vitórias saem via
+ * Reanimated worklets. A economia e a Party vivem no `useGameStore` (JS thread):
+ * os stats entram via props espelhadas em SharedValues e as vitórias saem via
  * `onEnemyDefeated` (runOnJS).
+ *
+ * Posições e danos da Party são mantidos em SharedValues do tipo array para que
+ * o `useFrameCallback` itere sobre a fila inteiramente na UI thread, sem cruzar
+ * a bridge. Cada membro é renderizado por um `<PartyMemberRect />` próprio (um
+ * componente por slot) para respeitar as Rules of Hooks quando a Party cresce.
  */
 export default function SkiaCombatEngine({
-  heroDamage = HERO_DAMAGE,
+  party,
   onEnemyDefeated,
 }: SkiaCombatEngineProps) {
   const { width: screenWidth } = useWindowDimensions();
   const arenaHeight = Math.round(screenWidth * ARENA_HEIGHT_RATIO);
   const centerY = arenaHeight / 2;
 
-  // Hero entra à esquerda; inimigo (re)aparece na extremidade direita da tela.
+  // Líder entra à esquerda; inimigo (re)aparece na extremidade direita da tela.
   const heroStartX = HERO_SIZE / 2;
   const enemyStartX = screenWidth + ENEMY_RADIUS;
+
+  // Posição inicial em fila: membro i atrás do líder por i * PARTY_SPACING.
+  const buildFormation = useCallback(
+    (count: number) => {
+      "worklet";
+      const positions: number[] = [];
+      for (let i = 0; i < count; i++) {
+        positions.push(heroStartX - i * PARTY_SPACING);
+      }
+      return positions;
+    },
+    [heroStartX],
+  );
 
   // Fonte do Floating Combat Text via fonte do sistema (sem bundle de assets).
   const fctFont = useMemo(
@@ -91,18 +111,24 @@ export default function SkiaCombatEngine({
   // ---- Estado simulado (SharedValues → UI thread, sem bridge) -------------
   const combatState = useSharedValue<CombatState>("APPROACHING");
 
-  const heroX = useSharedValue(heroStartX);
+  // Arrays espelhados da Party: posição X e dano base por membro.
+  const partyX = useSharedValue<number[]>(buildFormation(party.length));
+  const partyDamage = useSharedValue<number[]>(party.map((m) => m.baseDamage));
+
   const enemyX = useSharedValue(enemyStartX);
 
-  const heroHealth = useSharedValue(HERO_MAX_HEALTH);
+  // O Líder (índice 0) é quem colide e recebe dano do inimigo.
+  const leaderHealth = useSharedValue(party[0]?.maxHealth ?? HERO_MAX_HEALTH);
+  const leaderMaxHealth = useSharedValue(
+    party[0]?.maxHealth ?? HERO_MAX_HEALTH,
+  );
+
   const enemyHealth = useSharedValue(ENEMY_MAX_HEALTH);
   /** Vida máxima atual do inimigo — cresce a cada estágio. */
   const enemyMaxHealth = useSharedValue(ENEMY_MAX_HEALTH);
 
   // Estágio espelhado na UI thread: dirige o multiplicador de ouro e o scaling.
   const stage = useSharedValue(1);
-  // Dano do Hero espelhado da store (sincronizado por efeito abaixo).
-  const heroDamageValue = useSharedValue(heroDamage);
 
   // Acumulador de tempo para o dano periódico.
   const damageTimer = useSharedValue(0);
@@ -119,24 +145,51 @@ export default function SkiaCombatEngine({
   const heroFctOpacity = useSharedValue(0);
   const enemyFctOpacity = useSharedValue(0);
 
-  // Espelha o dano do Hero (store → UI thread) sem recriar o loop.
+  // Espelha o dano da Party (store → UI thread) sem recriar o loop.
   useEffect(() => {
-    heroDamageValue.value = heroDamage;
-  }, [heroDamage, heroDamageValue]);
+    partyDamage.value = party.map((m) => m.baseDamage);
+  }, [party, partyDamage]);
+
+  // Reposiciona a fila quando a quantidade de membros muda (ex.: recrutamento).
+  useEffect(() => {
+    partyX.value = buildFormation(party.length);
+  }, [party.length, buildFormation, partyX]);
+
+  // Espelha a vida máxima do Líder (store → UI thread).
+  useEffect(() => {
+    leaderMaxHealth.value = party[0]?.maxHealth ?? HERO_MAX_HEALTH;
+  }, [party, leaderMaxHealth]);
 
   // ---- Game loop ----------------------------------------------------------
   const frameCallback = useCallback(
     (frame: FrameInfo) => {
       "worklet";
       const dt = frame.timeSincePreviousFrame ?? 16;
+      const positions = partyX.value;
+      const count = positions.length;
+      if (count === 0) return;
+
+      // Avança os seguidores em direção ao seu slot atrás do membro da frente.
+      // Retorna um novo array (reanimated reage por referência).
+      const marchFollowers = (leaderX: number): number[] => {
+        const next = positions.slice();
+        next[0] = leaderX;
+        for (let i = 1; i < count; i++) {
+          const target = next[0] - i * PARTY_SPACING;
+          if (next[i] < target) {
+            next[i] = Math.min(next[i] + HERO_SPEED, target);
+          }
+        }
+        return next;
+      };
 
       if (combatState.value === "APPROACHING") {
-        heroX.value += HERO_SPEED;
+        // Líder caminha para a direita; a fila o acompanha mantendo o espaço.
+        partyX.value = marchFollowers(positions[0] + HERO_SPEED);
         enemyX.value -= ENEMY_SPEED;
 
-        const heroCenterX = heroX.value + HERO_SIZE / 2;
-        const distance = Math.abs(enemyX.value - heroCenterX);
-
+        const leaderCenterX = partyX.value[0] + HERO_SIZE / 2;
+        const distance = Math.abs(enemyX.value - leaderCenterX);
         if (distance <= COLLISION_THRESHOLD) {
           combatState.value = "BATTLING";
           damageTimer.value = 0;
@@ -146,18 +199,31 @@ export default function SkiaCombatEngine({
 
       if (combatState.value !== "BATTLING") return;
 
-      // Bump: velocidades zeradas (entidades paradas), aplicando dano por tick.
+      // Líder parado: seguidores continuam marchando até encostar na fila.
+      partyX.value = marchFollowers(positions[0]);
+
       damageTimer.value += dt;
       if (damageTimer.value < DAMAGE_INTERVAL_MS) return;
       damageTimer.value = 0;
 
-      const heroHit = heroDamageValue.value;
-      heroHealth.value = Math.max(0, heroHealth.value - ENEMY_DAMAGE);
-      enemyHealth.value = Math.max(0, enemyHealth.value - heroHit);
+      // Dano ao inimigo = soma dos membros EM POSIÇÃO DE ATAQUE (parados no slot).
+      // O Líder ataca sempre enquanto batalha; seguidores só ao alcançar o slot.
+      const dmgs = partyDamage.value;
+      const pos = partyX.value;
+      let totalDamage = dmgs[0] ?? 0;
+      for (let i = 1; i < count; i++) {
+        const target = pos[0] - i * PARTY_SPACING;
+        if (pos[i] >= target - PARTY_IN_POSITION_EPSILON) {
+          totalDamage += dmgs[i] ?? 0;
+        }
+      }
+
+      leaderHealth.value = Math.max(0, leaderHealth.value - ENEMY_DAMAGE);
+      enemyHealth.value = Math.max(0, enemyHealth.value - totalDamage);
 
       // Dispara o FCT de cada entidade.
       heroHitAmount.value = ENEMY_DAMAGE;
-      enemyHitAmount.value = heroHit;
+      enemyHitAmount.value = totalDamage;
       heroHitId.value += 1;
       enemyHitId.value += 1;
 
@@ -173,28 +239,30 @@ export default function SkiaCombatEngine({
         enemyHealth.value = enemyMaxHealth.value;
         enemyX.value = enemyStartX;
 
-        // Hero recupera a vida e volta a caminhar para a direita.
-        heroHealth.value = HERO_MAX_HEALTH;
+        // Líder recupera a vida e a fila reinicia a aproximação.
+        leaderHealth.value = leaderMaxHealth.value;
+        partyX.value = buildFormation(count);
         combatState.value = "APPROACHING";
         return;
       }
 
-      // ---- Derrota do Hero: tenta o estágio novamente (loop infinito) ---
-      if (heroHealth.value <= 0) {
-        heroHealth.value = HERO_MAX_HEALTH;
+      // ---- Derrota do Líder: tenta o estágio novamente (loop infinito) ---
+      if (leaderHealth.value <= 0) {
+        leaderHealth.value = leaderMaxHealth.value;
         enemyHealth.value = enemyMaxHealth.value;
         enemyX.value = enemyStartX;
+        partyX.value = buildFormation(count);
         combatState.value = "APPROACHING";
       }
     },
-    [enemyStartX, onEnemyDefeated],
+    [enemyStartX, buildFormation, onEnemyDefeated],
   );
 
   useFrameCallback(frameCallback);
 
   // ---- Animação do Floating Combat Text -----------------------------------
   const playFct = useCallback(
-    (translateY: typeof heroFctY, opacity: typeof heroFctOpacity) => {
+    (translateY: SharedValue<number>, opacity: SharedValue<number>) => {
       "worklet";
       translateY.value = 0;
       translateY.value = withTiming(-FCT_RISE, { duration: FCT_DURATION_MS });
@@ -221,14 +289,16 @@ export default function SkiaCombatEngine({
 
   // ---- Valores derivados para renderização --------------------------------
   const heroHealthRatio = useDerivedValue(
-    () => heroHealth.value / HERO_MAX_HEALTH,
+    () => leaderHealth.value / leaderMaxHealth.value,
   );
   const enemyHealthRatio = useDerivedValue(
     () => enemyHealth.value / enemyMaxHealth.value,
   );
 
+  const leaderX = useDerivedValue(() => partyX.value[0] ?? heroStartX);
+
   const heroBarX = useDerivedValue(
-    () => heroX.value + HERO_SIZE / 2 - HEALTH_BAR_WIDTH / 2,
+    () => leaderX.value + HERO_SIZE / 2 - HEALTH_BAR_WIDTH / 2,
   );
   const enemyBarX = useDerivedValue(() => enemyX.value - HEALTH_BAR_WIDTH / 2);
 
@@ -237,7 +307,7 @@ export default function SkiaCombatEngine({
   const enemyBarY =
     centerY - ENEMY_RADIUS - HEALTH_BAR_OFFSET - HEALTH_BAR_HEIGHT;
 
-  const heroFctX = useDerivedValue(() => heroX.value + HERO_SIZE / 2 - 12);
+  const heroFctX = useDerivedValue(() => leaderX.value + HERO_SIZE / 2 - 12);
   const enemyFctX = useDerivedValue(() => enemyX.value - 12);
 
   const heroFctText = useDerivedValue(() =>
@@ -252,23 +322,16 @@ export default function SkiaCombatEngine({
       <Canvas style={[styles.canvas, { height: arenaHeight }]}>
         <Fill color={palette.trueBlack} />
 
-        {/* ---- HERO (Idlemon placeholder) ---- */}
-        <Rect
-          x={heroX}
-          y={centerY - HERO_SIZE / 2}
-          width={HERO_SIZE}
-          height={HERO_SIZE}
-          color={HERO_GLOW_COLOR}
-        >
-          <BlurMask blur={HERO_GLOW_BLUR} style="outer" />
-        </Rect>
-        <Rect
-          x={heroX}
-          y={centerY - HERO_SIZE / 2}
-          width={HERO_SIZE}
-          height={HERO_SIZE}
-          color={ENTITY_COLOR}
-        />
+        {/* ---- PARTY (Idlemons placeholders em fila) ---- */}
+        {party.map((member, index) => (
+          <PartyMemberRect
+            key={member.id}
+            index={index}
+            partyX={partyX}
+            y={centerY - HERO_SIZE / 2}
+            color={member.color}
+          />
+        ))}
 
         {/* ---- ENEMY (Monstro placeholder) ---- */}
         <Circle cx={enemyX} cy={centerY} r={ENEMY_RADIUS} color={ENEMY_GLOW_COLOR}>
@@ -276,7 +339,7 @@ export default function SkiaCombatEngine({
         </Circle>
         <Circle cx={enemyX} cy={centerY} r={ENEMY_RADIUS} color={ENTITY_COLOR} />
 
-        {/* ---- Barras de vida ---- */}
+        {/* ---- Barras de vida (Líder + inimigo) ---- */}
         <HealthBar
           x={heroBarX}
           y={heroBarY}
@@ -315,6 +378,38 @@ export default function SkiaCombatEngine({
         />
       </Canvas>
     </View>
+  );
+}
+
+interface PartyMemberRectProps {
+  /** Índice do membro na fila (0 = Líder). */
+  index: number;
+  /** Array compartilhado de posições X da Party (UI thread). */
+  partyX: SharedValue<number[]>;
+  /** Topo do quadrado (constante por frame). */
+  y: number;
+  /** Cor neon do Idlemon (glow + preenchimento). */
+  color: string;
+}
+
+/**
+ * Renderiza um único Idlemon da fila. Cada membro é um componente próprio para
+ * que adicionar/remover membros monte/desmonte instâncias (sem violar as Rules
+ * of Hooks ao iterar sobre um array de tamanho variável).
+ */
+function PartyMemberRect({ index, partyX, y, color }: PartyMemberRectProps) {
+  const x = useDerivedValue(() => {
+    const value = partyX.value[index];
+    return value === undefined ? -HERO_SIZE : value;
+  });
+
+  return (
+    <>
+      <Rect x={x} y={y} width={HERO_SIZE} height={HERO_SIZE} color={color}>
+        <BlurMask blur={HERO_GLOW_BLUR} style="outer" />
+      </Rect>
+      <Rect x={x} y={y} width={HERO_SIZE} height={HERO_SIZE} color={color} />
+    </>
   );
 }
 
