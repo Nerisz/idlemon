@@ -41,6 +41,14 @@ export const RUNE_TYPE_LABELS: Record<RuneType, string> = {
   attack_speed: "Velocidade",
 };
 
+/** Rótulo de raridade em PT-BR (usado em feedbacks da Loja). */
+export const RARITY_LABELS: Record<RuneRarity, string> = {
+  common: "Comum",
+  rare: "Rara",
+  epic: "Épica",
+  legendary: "Lendária",
+};
+
 /** Quantidade máxima de runas equipadas simultaneamente. */
 export const MAX_RUNE_SLOTS = 2;
 

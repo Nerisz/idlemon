@@ -8,7 +8,8 @@ import {
   DAMAGE_UPGRADE_AMOUNT,
   DAMAGE_UPGRADE_COST_GROWTH,
 } from "../components/combat/constants";
-import { MAX_RUNE_SLOTS, getRuneById } from "../data/runesData";
+import { MAX_RUNE_SLOTS, getRuneById, type Rune } from "../data/runesData";
+import { rollRune } from "../utils/gachaSystem";
 
 /**
  * Um membro da Party (Idlemon). É a unidade de combate da fila indiana:
@@ -71,6 +72,12 @@ interface GameState {
   equipRune: (runeId: string, slotIndex: number) => void;
   /** Esvazia o slot informado. */
   unequipRune: (slotIndex: number) => void;
+  /**
+   * Compra um Baú de Runas: debita `cost` se houver saldo, sorteia uma runa
+   * (gacha ponderado), adiciona ao inventário e retorna a runa sorteada.
+   * Retorna `null` quando não há ouro suficiente (sem efeitos colaterais).
+   */
+  buyRuneChest: (cost: number) => Rune | null;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -138,6 +145,18 @@ export const useGameStore = create<GameState>((set, get) => ({
       next[slotIndex] = null;
       return { equippedRunes: next };
     });
+  },
+
+  buyRuneChest: (cost) => {
+    const price = Math.max(0, Math.round(cost));
+    if (get().gold < price) return null;
+
+    const rune = rollRune();
+    set((state) => ({
+      gold: state.gold - price,
+      inventoryRunes: [...state.inventoryRunes, rune.id],
+    }));
+    return rune;
   },
 }));
 

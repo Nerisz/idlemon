@@ -23,6 +23,7 @@ export const palette = {
   neonCyan: "#00F0FF",
   neonPurple: "#A855F7",
   neonGold: "#FFD60A",
+  neonMagenta: "#FF2D95",
 
   // Combate
   heroFill: "#00F0FF",
@@ -46,6 +47,13 @@ export const glow = {
     shadowOpacity: 0.5,
     shadowRadius: 10,
     elevation: 6,
+  },
+  magenta: {
+    shadowColor: palette.neonMagenta,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 14,
+    elevation: 10,
   },
 } as const;
 

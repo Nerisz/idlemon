@@ -1,8 +1,13 @@
-import React, { useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { palette, radius, spacing } from "../../theme/colors";
+import React, { useCallback, useState } from "react";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { glow, palette, radius, spacing } from "../../theme/colors";
 import { useGameStore, type PartyMember } from "../../store/useGameStore";
 import { DAMAGE_UPGRADE_AMOUNT } from "../combat/constants";
+import {
+  RARITY_LABELS,
+  RUNE_TYPE_LABELS,
+  formatRuneBonus,
+} from "../../data/runesData";
 import { WalletHeader } from "./WalletHeader";
 import { NeonButton } from "./NeonButton";
 import { RunesView } from "./RunesView";
@@ -49,12 +54,77 @@ function TabContent({ tab }: { tab: DashboardTab }) {
     return <RunesView />;
   }
 
+  return <LojaTab />;
+}
+
+/** Custo fixo do Baú de Runas (MVP). */
+const RUNE_CHEST_COST = 100;
+
+/** Aba da Loja: aquisição de runas via Baú (gacha) consumindo ouro. */
+function LojaTab() {
+  const gold = useGameStore((state) => state.gold);
+  const buyRuneChest = useGameStore((state) => state.buyRuneChest);
+
+  const canAfford = gold >= RUNE_CHEST_COST;
+
+  const handleBuyChest = useCallback(() => {
+    const rune = buyRuneChest(RUNE_CHEST_COST);
+    if (!rune) {
+      Alert.alert(
+        "Ouro insuficiente",
+        `Você precisa de ${RUNE_CHEST_COST.toLocaleString("pt-BR")} de ouro para abrir o baú.`,
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Runa Adquirida!",
+      `Você tirou ${rune.name} (${RARITY_LABELS[rune.rarity]})\n${RUNE_TYPE_LABELS[rune.type]} ${formatRuneBonus(rune)}`,
+    );
+  }, [buyRuneChest]);
+
   return (
-    <View style={styles.tabContent}>
+    <View style={styles.shopContainer}>
       <Text style={styles.sectionTitle}>Loja</Text>
-      <Text style={styles.sectionHint}>
-        Gaste seu ouro em melhorias e equipamentos. (Em breve)
+      <Text style={styles.shopHint}>
+        Invista seu ouro em baús e desbloqueie runas mais poderosas.
       </Text>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Comprar Baú de Runas Misterioso"
+        accessibilityState={{ disabled: !canAfford }}
+        onPress={handleBuyChest}
+        disabled={!canAfford}
+        style={({ pressed }) => [
+          styles.chestCard,
+          glow.magenta,
+          !canAfford && styles.chestCardDisabled,
+          pressed && canAfford && styles.chestCardPressed,
+        ]}
+      >
+        <View style={styles.chestBadge}>
+          <Text style={styles.chestBadgeText}>PREMIUM</Text>
+        </View>
+
+        <Text style={styles.chestTitle}>Baú de Runas Misterioso</Text>
+        <Text style={styles.chestDescription}>
+          Contém 1 runa aleatória. Chance de Lendária a cada abertura.
+        </Text>
+
+        <View style={styles.chestPriceRow}>
+          <Text style={styles.chestPriceLabel}>Abrir por</Text>
+          <Text style={styles.chestPriceValue}>
+            {RUNE_CHEST_COST.toLocaleString("pt-BR")} Ouro
+          </Text>
+        </View>
+
+        {!canAfford ? (
+          <Text style={styles.chestLockedHint}>
+            Ouro insuficiente — derrote mais inimigos.
+          </Text>
+        ) : null}
+      </Pressable>
     </View>
   );
 }
@@ -269,5 +339,79 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1,
+  },
+  shopContainer: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  shopHint: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 18,
+  },
+  chestCard: {
+    marginTop: spacing.md,
+    backgroundColor: palette.surfaceElevated,
+    borderWidth: 1.5,
+    borderColor: palette.neonMagenta,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  chestCardDisabled: {
+    opacity: 0.45,
+  },
+  chestCardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.99 }],
+  },
+  chestBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: palette.neonMagenta,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  chestBadgeText: {
+    color: palette.trueBlack,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  chestTitle: {
+    color: palette.textPrimary,
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  chestDescription: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: "500",
+    lineHeight: 18,
+  },
+  chestPriceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+  },
+  chestPriceLabel: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  chestPriceValue: {
+    color: palette.neonMagenta,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  chestLockedHint: {
+    color: palette.textMuted,
+    fontSize: 12,
+    fontWeight: "600",
   },
 });
