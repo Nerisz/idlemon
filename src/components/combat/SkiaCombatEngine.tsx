@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo } from "react";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import {
   Canvas,
-  Rect,
   Circle,
   BlurMask,
   Fill,
@@ -24,6 +23,8 @@ import { palette } from "../../theme/colors";
 import type { CombatStats, PartyMember } from "../../store/useGameStore";
 import { HealthBar } from "./HealthBar";
 import { FloatingDamage } from "./FloatingDamage";
+import { ParallaxBackground } from "./ParallaxBackground";
+import { Sprite } from "./Sprite";
 import {
   ARENA_HEIGHT_RATIO,
   HERO_SIZE,
@@ -49,6 +50,10 @@ import {
   FCT_FONT_SIZE,
   FCT_RISE,
   FCT_DURATION_MS,
+  PARALLAX_BG_SPEED,
+  PARALLAX_FG_SPEED,
+  BOB_AMPLITUDE,
+  BOB_SPEED,
 } from "./constants";
 
 /** Fases do encontro. Pronto para expansão (status, fuga, recompensa). */
@@ -145,6 +150,14 @@ export default function SkiaCombatEngine({
   // Acumulador de tempo para o dano periódico.
   const damageTimer = useSharedValue(0);
 
+  // ---- Parallax & Bobbing (UI thread) -------------------------------------
+  // Deslocamento horizontal das camadas (esteira infinita). Avançam apenas
+  // enquanto o herói caminha (APPROACHING).
+  const bgOffset = useSharedValue(0);
+  const fgOffset = useSharedValue(0);
+  // Fase angular do bobbing de caminhada do Líder.
+  const bobPhase = useSharedValue(0);
+
   // Modificadores das runas espelhados na UI thread (lidos ao vivo no loop).
   const damageMultiplier = useSharedValue(modifiers.damageMultiplier);
   const goldMultiplier = useSharedValue(modifiers.goldMultiplier);
@@ -198,6 +211,17 @@ export default function SkiaCombatEngine({
       const positions = partyX.value;
       const count = positions.length;
       if (count === 0) return;
+
+      // Parallax + bobbing só avançam com o herói caminhando (esteira viva).
+      // Reset contínuo (subtrai a largura, sem zerar) p/ loop sem emenda.
+      if (combatState.value === "APPROACHING") {
+        const step = dt / 16;
+        bgOffset.value += PARALLAX_BG_SPEED * step;
+        if (bgOffset.value >= screenWidth) bgOffset.value -= screenWidth;
+        fgOffset.value += PARALLAX_FG_SPEED * step;
+        if (fgOffset.value >= screenWidth) fgOffset.value -= screenWidth;
+        bobPhase.value += BOB_SPEED * step;
+      }
 
       // Avança os seguidores em direção ao seu slot atrás do membro da frente.
       // Retorna um novo array (reanimated reage por referência).
@@ -292,7 +316,7 @@ export default function SkiaCombatEngine({
         combatState.value = "APPROACHING";
       }
     },
-    [enemyStartX, buildFormation, onEnemyDefeated],
+    [enemyStartX, screenWidth, buildFormation, onEnemyDefeated],
   );
 
   useFrameCallback(frameCallback);
@@ -359,14 +383,24 @@ export default function SkiaCombatEngine({
       <Canvas style={[styles.canvas, { height: arenaHeight }]}>
         <Fill color={palette.trueBlack} />
 
+        {/* ---- Cenário em Parallax (esteira infinita, atrás de tudo) ---- */}
+        <ParallaxBackground
+          width={screenWidth}
+          height={arenaHeight}
+          bgOffset={bgOffset}
+          fgOffset={fgOffset}
+        />
+
         {/* ---- PARTY (Idlemons placeholders em fila) ---- */}
         {party.map((member, index) => (
-          <PartyMemberRect
+          <PartyMemberSprite
             key={member.id}
             index={index}
             partyX={partyX}
-            y={centerY - HERO_SIZE / 2}
+            baseY={centerY - HERO_SIZE / 2}
             color={member.color}
+            bobPhase={bobPhase}
+            combatState={combatState}
           />
         ))}
 
@@ -418,35 +452,57 @@ export default function SkiaCombatEngine({
   );
 }
 
-interface PartyMemberRectProps {
+interface PartyMemberSpriteProps {
   /** Índice do membro na fila (0 = Líder). */
   index: number;
   /** Array compartilhado de posições X da Party (UI thread). */
   partyX: SharedValue<number[]>;
-  /** Topo do quadrado (constante por frame). */
-  y: number;
+  /** Topo da entidade em repouso (linha do chão, constante por frame). */
+  baseY: number;
   /** Cor neon do Idlemon (glow + preenchimento). */
   color: string;
+  /** Fase do bobbing de caminhada (aplicado apenas ao Líder). */
+  bobPhase: SharedValue<number>;
+  /** Estado do combate — o bob só age durante a caminhada (APPROACHING). */
+  combatState: SharedValue<CombatState>;
 }
 
 /**
- * Renderiza um único Idlemon da fila. Cada membro é um componente próprio para
- * que adicionar/remover membros monte/desmonte instâncias (sem violar as Rules
- * of Hooks ao iterar sobre um array de tamanho variável).
+ * Renderiza um único Idlemon da fila via `Sprite` (renderSprite). Cada membro é
+ * um componente próprio para que adicionar/remover membros monte/desmonte
+ * instâncias (sem violar as Rules of Hooks ao iterar um array variável).
+ *
+ * O Líder (índice 0) ganha um bobbing vertical (Math.sin) enquanto caminha,
+ * simulando a cadência de um sprite em pixel art. Tudo na UI thread.
  */
-function PartyMemberRect({ index, partyX, y, color }: PartyMemberRectProps) {
+function PartyMemberSprite({
+  index,
+  partyX,
+  baseY,
+  color,
+  bobPhase,
+  combatState,
+}: PartyMemberSpriteProps) {
   const x = useDerivedValue(() => {
     const value = partyX.value[index];
     return value === undefined ? -HERO_SIZE : value;
   });
 
+  const y = useDerivedValue(() => {
+    if (index !== 0) return baseY;
+    const walking = combatState.value === "APPROACHING";
+    const bob = walking ? Math.sin(bobPhase.value) * BOB_AMPLITUDE : 0;
+    return baseY + bob;
+  });
+
   return (
-    <>
-      <Rect x={x} y={y} width={HERO_SIZE} height={HERO_SIZE} color={color}>
-        <BlurMask blur={HERO_GLOW_BLUR} style="outer" />
-      </Rect>
-      <Rect x={x} y={y} width={HERO_SIZE} height={HERO_SIZE} color={color} />
-    </>
+    <Sprite
+      x={x}
+      y={y}
+      size={HERO_SIZE}
+      color={color}
+      glowBlur={HERO_GLOW_BLUR}
+    />
   );
 }
 

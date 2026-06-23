@@ -65,3 +65,24 @@ export const HEALTH_BAR_OFFSET = 16;
 export const FCT_FONT_SIZE = 18;
 export const FCT_RISE = 42; // distância (px) que o número sobe
 export const FCT_DURATION_MS = 750;
+
+// ---- Parallax Background (efeito esteira / loop infinito) ------------------
+/**
+ * Velocidades em px por frame normalizado a 60fps. O fundo distante (céu) move
+ * devagar e o chão/trilha move rápido — a diferença cria a sensação de
+ * profundidade (parallax) enquanto o herói caminha para a direita.
+ */
+export const PARALLAX_BG_SPEED = 0.45;
+export const PARALLAX_FG_SPEED = 2.4;
+/** Altura (px) da faixa de chão renderizada na base da arena. */
+export const GROUND_HEIGHT = 28;
+/** Quantidade alvo de elementos por tile (recalculada p/ tiling perfeito). */
+export const SKYLINE_COUNT = 6;
+export const STAR_COUNT = 12;
+export const GROUND_DASH_TARGET = 48;
+
+// ---- Sprite / Bobbing (caminhada em pixel art) ----------------------------
+/** Amplitude vertical (px) do bobbing de caminhada do Líder. */
+export const BOB_AMPLITUDE = 3;
+/** Velocidade angular (rad por frame @60fps) do bobbing. */
+export const BOB_SPEED = 0.18;
